@@ -25,7 +25,7 @@ jobs:
       - name: Verify lock and environment
         run: |
           uv lock --check
-          uv sync --frozen --group dev --extra drive
+          uv sync --frozen --group dev --extra drive --extra local-auth
       - name: Static checks and tests
         run: |
           uv run --frozen ruff check src tests

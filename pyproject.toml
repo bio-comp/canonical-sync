@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "canonical-sync"
-version = "0.2.0"
+version = "0.2.1"
 description = "Verified authoritative-source acquisition, snapshot, and publication mechanics"
 readme = "README.md"
 requires-python = ">=3.11"
