@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "canonical-sync"
+version = "0.1.0"
+description = "Verified authoritative-source acquisition, snapshot, and publication mechanics"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pydantic==2.14.1"]
+
+[project.optional-dependencies]
+drive = [
+    "google-api-python-client==2.201.0",
+    "google-auth==2.62.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/canonical_sync"]
+
+[dependency-groups]
+dev = [
+    "build==1.3.0",
+    "hypothesis>=6.100.0",
+    "mypy==1.18.2",
+    "pytest>=9,<10",
+    "ruff==0.14.4",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
