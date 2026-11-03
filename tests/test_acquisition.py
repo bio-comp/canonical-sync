@@ -47,7 +47,7 @@ def profile(*, with_membership: bool = False):
     ) if with_membership else ()
     return profile_from_record(
         AuthorityProfileRecord(
-            profile_name="llm-evaluation-test",
+            profile_name="consumer-test",
             objects=(spec("README.md", "object-001"), spec("DECISIONS.md", "object-002")),
             memberships=memberships,
         )

@@ -242,7 +242,7 @@ def test_receipt_remote_drops_transport_secrets(tmp_path):
     receipt = GitPublisher(str(remote), ref='refs/heads/main').publish(
         tree(), expected_base=None, commit_message='base')
     raw = receipt.model_dump()
-    raw['remote'] = 'https://user:FAKE_TOKEN@github.com/bio-comp/llm-evaluation.git?key=FAKE_QUERY#FAKE_FRAGMENT'
+    raw['remote'] = 'https://user:FAKE_TOKEN@github.com/example/repository.git?key=FAKE_QUERY#FAKE_FRAGMENT'
     safe = GitPublicationReceiptRecord.model_validate(raw)
     payload = canonical_record_bytes(safe)
     assert all(x not in payload for x in (b'FAKE_TOKEN', b'FAKE_QUERY', b'FAKE_FRAGMENT'))

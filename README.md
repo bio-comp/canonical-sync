@@ -13,7 +13,7 @@ Verified authoritative-source acquisition, snapshot integrity, canonical record 
 - caller-approved mechanical Git publication/readback;
 - strict, versioned Pydantic records and explicit canonical serialization.
 
-The package does not contain Prompt Research or `llm_evaluation` canonical IDs, project governance states, scientific policy, or publication authorization.
+The package does not contain consumer-project canonical IDs, project governance states, scientific policy, or publication authorization.
 
 ## Development
 
@@ -24,3 +24,13 @@ uv run ruff check src tests
 uv run mypy src
 uv build
 ```
+
+## Operator tooling
+
+Install the `local-auth` extra to provision or validate exact-scope Google Drive authorized-user ADC:
+
+```bash
+canonical-sync refresh-google-drive-adc --help
+```
+
+Credential provisioning is operator tooling; acquisition APIs consume already-valid credentials.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
@@ -26,8 +27,11 @@ DRIVE_METADATA_FIELDS = (
     "id,name,mimeType,version,modifiedTime,parents,trashed,capabilities(canDownload)"
 )
 GOOGLE_DOC_MARKDOWN_REPRESENTATION = "google-drive-export-markdown-v1"
+GOOGLE_DRIVE_FILE_DOWNLOAD_REPRESENTATION = "google-drive-file-download-v1"
 _GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
 _MARKDOWN_MIME = "text/markdown"
+_GOOGLE_NATIVE_MIME_PREFIX = "application/vnd.google-apps."
+_RAW_DOWNLOAD_FIELDS = "id,mimeType,size,sha256Checksum,capabilities(canDownload)"
 _TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 _GOOGLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -39,6 +43,7 @@ class _Request(Protocol):
 class _FilesResource(Protocol):
     def get(self, **kwargs: object) -> _Request: ...
     def export(self, **kwargs: object) -> _Request: ...
+    def get_media(self, **kwargs: object) -> _Request: ...
     def list(self, **kwargs: object) -> _Request: ...
 
 
@@ -68,6 +73,41 @@ class _DriveMetadataWire(_WireModel):
 class _DriveListWire(_WireModel):
     files: list[_DriveMetadataWire]
     nextPageToken: str | None = None
+
+
+class _RawDownloadMetadataWire(_WireModel):
+    id: str
+    mimeType: str
+    size: str | None = None
+    sha256Checksum: str | None = None
+    capabilities: _CapabilitiesWire
+
+
+def _raw_download_contract(
+    raw: object, spec: AuthorityObjectSpec
+) -> tuple[int | None, str | None]:
+    try:
+        wire = _RawDownloadMetadataWire.model_validate(raw, strict=True)
+    except ValidationError as exc:
+        raise TransportPermanentError("Drive stored-file metadata failed strict validation") from exc
+    if wire.id != spec.object_id or wire.mimeType != spec.expected_mime_type:
+        raise TransportPermanentError("Drive stored-file metadata does not match authority")
+    if wire.mimeType.startswith(_GOOGLE_NATIVE_MIME_PREFIX):
+        raise UnsupportedRepresentationError("raw stored-file representation requires a stored file")
+    if not wire.capabilities.canDownload:
+        raise UnsupportedRepresentationError("Drive stored file is not downloadable")
+    size: int | None = None
+    if wire.size is not None:
+        try:
+            size = int(wire.size)
+        except ValueError as exc:
+            raise TransportPermanentError("Drive stored-file size is invalid") from exc
+        if size < 0 or str(size) != wire.size:
+            raise TransportPermanentError("Drive stored-file size is not canonical")
+    checksum = wire.sha256Checksum
+    if checksum is not None and re.fullmatch(r"[0-9A-Fa-f]{64}", checksum) is None:
+        raise TransportPermanentError("Drive stored-file SHA-256 is invalid")
+    return size, checksum.lower() if checksum is not None else None
 
 
 def _parse_modified_time(value: str) -> datetime:
@@ -271,16 +311,35 @@ class GoogleDriveTransport:
         if spec.provider != "google_drive":
             raise TransportPermanentError("Google Drive transport received a different provider")
         object_id = _google_id(spec.object_id, label="object ID")
-        if spec.representation_schema != GOOGLE_DOC_MARKDOWN_REPRESENTATION:
-            raise UnsupportedRepresentationError("Google source representation schema is unsupported")
-        if spec.expected_mime_type != _GOOGLE_DOC_MIME:
-            raise UnsupportedRepresentationError("Markdown export requires a native Google Doc")
-        raw = self._execute(
-            lambda: self._drive.files().export(fileId=object_id, mimeType=_MARKDOWN_MIME)
-        )
-        if type(raw) is not bytes:
-            raise TransportPermanentError("Drive Markdown export did not return bytes")
-        return SourceContent(representation_schema=GOOGLE_DOC_MARKDOWN_REPRESENTATION, data=raw)
+        if spec.representation_schema == GOOGLE_DOC_MARKDOWN_REPRESENTATION:
+            if spec.expected_mime_type != _GOOGLE_DOC_MIME:
+                raise UnsupportedRepresentationError("Markdown export requires a native Google Doc")
+            raw = self._execute(
+                lambda: self._drive.files().export(fileId=object_id, mimeType=_MARKDOWN_MIME)
+            )
+            if type(raw) is not bytes:
+                raise TransportPermanentError("Drive Markdown export did not return bytes")
+            return SourceContent(representation_schema=GOOGLE_DOC_MARKDOWN_REPRESENTATION, data=raw)
+        if spec.representation_schema == GOOGLE_DRIVE_FILE_DOWNLOAD_REPRESENTATION:
+            metadata = self._execute(
+                lambda: self._drive.files().get(
+                    fileId=object_id,
+                    fields=_RAW_DOWNLOAD_FIELDS,
+                    supportsAllDrives=True,
+                )
+            )
+            expected_size, expected_sha256 = _raw_download_contract(metadata, spec)
+            raw = self._execute(lambda: self._drive.files().get_media(fileId=object_id))
+            if type(raw) is not bytes:
+                raise TransportPermanentError("Drive stored-file download did not return bytes")
+            if expected_size is not None and len(raw) != expected_size:
+                raise TransportPermanentError("Drive stored-file size did not match downloaded bytes")
+            if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+                raise TransportPermanentError("Drive stored-file SHA-256 did not match downloaded bytes")
+            return SourceContent(
+                representation_schema=GOOGLE_DRIVE_FILE_DOWNLOAD_REPRESENTATION, data=raw
+            )
+        raise UnsupportedRepresentationError("Google source representation schema is unsupported")
 
     def list_members(self, parent_id: str) -> tuple[SourceObservation, ...]:
         parent = _google_id(parent_id, label="parent ID")

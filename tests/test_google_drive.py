@@ -19,6 +19,7 @@ from canonical_sync.google_drive import (
     DRIVE_METADATA_FIELDS,
     DRIVE_READONLY_SCOPE,
     GOOGLE_DOC_MARKDOWN_REPRESENTATION,
+    GOOGLE_DRIVE_FILE_DOWNLOAD_REPRESENTATION,
     GoogleDriveTransport,
 )
 
@@ -42,12 +43,14 @@ class Request:
 
 
 class Resource:
-    def __init__(self, *, gets=(), exports=(), lists=()) -> None:
+    def __init__(self, *, gets=(), exports=(), media=(), lists=()) -> None:
         self.get_values = list(gets)
         self.export_values = list(exports)
+        self.media_values = list(media)
         self.list_values = list(lists)
         self.get_calls: list[dict[str, object]] = []
         self.export_calls: list[dict[str, object]] = []
+        self.media_calls: list[dict[str, object]] = []
         self.list_calls: list[dict[str, object]] = []
 
     @staticmethod
@@ -64,6 +67,10 @@ class Resource:
     def export(self, **kwargs):
         self.export_calls.append(kwargs)
         return self._request(self.export_values)
+
+    def get_media(self, **kwargs):
+        self.media_calls.append(kwargs)
+        return self._request(self.media_values)
 
     def list(self, **kwargs):
         self.list_calls.append(kwargs)
@@ -103,8 +110,8 @@ def spec(*, representation: str = GOOGLE_DOC_MARKDOWN_REPRESENTATION) -> Authori
     )
 
 
-def transport(*, gets=(), exports=(), lists=(), attempts: int = 2):
-    resource = Resource(gets=gets, exports=exports, lists=lists)
+def transport(*, gets=(), exports=(), media=(), lists=(), attempts: int = 2):
+    resource = Resource(gets=gets, exports=exports, media=media, lists=lists)
     value = GoogleDriveTransport(
         drive_service=DriveService(resource),
         http_error_types=(FakeHttpError,),
@@ -113,6 +120,71 @@ def transport(*, gets=(), exports=(), lists=(), attempts: int = 2):
     )
     return value, resource
 
+
+
+def raw_spec(*, mime_type: str = "text/markdown") -> AuthorityObjectSpec:
+    return AuthorityObjectSpec(
+        logical_path="PROJECT_CANONICAL_FILES.md",
+        provider="google_drive",
+        object_id="object-raw-001",
+        expected_name="PROJECT_CANONICAL_FILES.md",
+        expected_mime_type=mime_type,
+        expected_parent_id="parent-001",
+        representation_schema=GOOGLE_DRIVE_FILE_DOWNLOAD_REPRESENTATION,
+    )
+
+
+def raw_metadata(*, data: bytes, checksum: str | None = None, mime_type: str = "text/markdown"):
+    import hashlib
+
+    return {
+        "id": "object-raw-001",
+        "mimeType": mime_type,
+        "size": str(len(data)),
+        "sha256Checksum": checksum if checksum is not None else hashlib.sha256(data).hexdigest(),
+        "capabilities": {"canDownload": True},
+    }
+
+
+def test_raw_stored_file_download_uses_exact_bytes_and_provider_checksum() -> None:
+    data = b"raw\x00bytes\r\n"
+    value, resource = transport(gets=[raw_metadata(data=data)], media=[data])
+
+    acquired = value.read(raw_spec())
+
+    assert acquired.representation_schema == GOOGLE_DRIVE_FILE_DOWNLOAD_REPRESENTATION
+    assert acquired.data == data
+    assert resource.media_calls == [{"fileId": "object-raw-001"}]
+    assert resource.export_calls == []
+
+
+def test_raw_stored_file_checksum_mismatch_fails_closed() -> None:
+    data = b"actual bytes"
+    value, _ = transport(gets=[raw_metadata(data=data, checksum="0" * 64)], media=[data])
+
+    with pytest.raises(TransportPermanentError, match="SHA-256"):
+        value.read(raw_spec())
+
+
+def test_raw_stored_file_never_falls_back_to_native_doc_export() -> None:
+    data = b"native doc cannot be raw-downloaded by this contract"
+    value, resource = transport(
+        gets=[raw_metadata(data=data, mime_type="application/vnd.google-apps.document")],
+        media=[data],
+    )
+
+    with pytest.raises(UnsupportedRepresentationError, match="stored file"):
+        value.read(raw_spec(mime_type="application/vnd.google-apps.document"))
+    assert resource.media_calls == []
+    assert resource.export_calls == []
+
+
+def test_raw_stored_file_nonbytes_response_fails_closed() -> None:
+    data = b"expected"
+    value, _ = transport(gets=[raw_metadata(data=data)], media=["not-bytes"] )
+
+    with pytest.raises(TransportPermanentError, match="bytes"):
+        value.read(raw_spec())
 
 def test_exact_readonly_scope_metadata_and_markdown_export_requests() -> None:
     markdown = b"# Heading\n\nBody\n"
